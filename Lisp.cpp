@@ -181,6 +181,7 @@ public:
     }
 };
 
+// ========== Исправленный Parser с методом hasMore ==========
 class Parser {
     std::vector<std::string> tokens;
     size_t pos = 0;
@@ -211,6 +212,10 @@ class Parser {
 public:
     Parser(const std::vector<std::string>& tokens) : tokens(tokens) {}
 
+    bool hasMore() const {
+        return pos < tokens.size();
+    }
+
     ObjectPtr parse() {
         if (pos >= tokens.size()) {
             return std::make_shared<Object>(Nil{});
@@ -226,7 +231,7 @@ public:
             if (pos >= tokens.size()) {
                 throw std::runtime_error("Unclosed parenthesis");
             }
-            pos++;
+            pos++; // пропускаем ')'
             return std::make_shared<Object>(list);
         }
         else if (token == ")") {
@@ -237,6 +242,15 @@ public:
         }
     }
 };
+
+// ========== Функция для парсинга нескольких выражений ==========
+std::vector<ObjectPtr> parseMultiple(Parser& parser) {
+    std::vector<ObjectPtr> expressions;
+    while (parser.hasMore()) {
+        expressions.push_back(parser.parse());
+    }
+    return expressions;
+}
 
 // ========== Вывод ==========
 std::string toString(ObjectPtr obj) {
@@ -441,6 +455,12 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
         return std::make_shared<Object>(Nil{});
     }
 
+    // Добавьте в applyPrimitive:
+    if (name == "flush") {
+        std::cout.flush();
+        return std::make_shared<Object>(Nil{});
+    }
+
     throw std::runtime_error("Unknown primitive: " + name);
 }
 
@@ -540,10 +560,11 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
     throw std::runtime_error("Unknown expression type");
 }
 
-// ========== REPL ==========
+// ========== Исправленный REPL ==========
 void repl() {
     auto globalEnv = std::make_shared<Environment>();
 
+    // Добавляем примитивы
     globalEnv->define("+", std::make_shared<Object>(Symbol{ "+" }));
     globalEnv->define("-", std::make_shared<Object>(Symbol{ "-" }));
     globalEnv->define("*", std::make_shared<Object>(Symbol{ "*" }));
@@ -556,8 +577,10 @@ void repl() {
     globalEnv->define("list", std::make_shared<Object>(Symbol{ "list" }));
     globalEnv->define("null?", std::make_shared<Object>(Symbol{ "null?" }));
     globalEnv->define("display", std::make_shared<Object>(Symbol{ "display" }));
+    globalEnv->define("print", std::make_shared<Object>(Symbol{ "print" }));
     globalEnv->define("write", std::make_shared<Object>(Symbol{ "write" }));
     globalEnv->define("newline", std::make_shared<Object>(Symbol{ "newline" }));
+    globalEnv->define("flush", std::make_shared<Object>(Symbol{ "flush" }));
 
     std::string input;
     while (true) {
@@ -571,16 +594,48 @@ void repl() {
             Tokenizer tokenizer(input);
             auto tokens = tokenizer.tokenize();
             Parser parser(tokens);
-            auto expr = parser.parse();
-            auto result = eval(expr, globalEnv);
-            std::cout << toString(result) << std::endl;
+
+            // Парсим ВСЕ выражения в строке
+            std::vector<ObjectPtr> expressions;
+            while (parser.hasMore()) {
+                expressions.push_back(parser.parse());
+            }
+
+            // Выполняем каждое выражение
+            ObjectPtr lastResult = nullptr;
+            for (auto& expr : expressions) {
+                lastResult = eval(expr, globalEnv);
+            }
+
+            // Выводим только результат последнего выражения,
+            // если оно не является "silent" функцией
+            if (lastResult && !expressions.empty()) {
+                // Проверяем, было ли последнее выражение вызовом display/print/newline/define
+                ObjectPtr lastExpr = expressions.back();
+                bool isSilent = false;
+
+                if (lastExpr->isList()) {
+                    auto& list = lastExpr->asList();
+                    if (!list.empty() && list[0]->isSymbol()) {
+                        std::string funcName = list[0]->asSymbol().name;
+                        if (funcName == "display" || funcName == "print" ||
+                            funcName == "newline" || funcName == "define") {
+                            isSilent = true;
+                        }
+                    }
+                }
+
+                // Если это define, он возвращает Nil, но мы не выводим его
+                if (!isSilent && !lastResult->isNil()) {
+                    std::cout << toString(lastResult) << std::endl;
+                }
+            }
         }
         catch (const std::exception& e) {
             std::cout << "Error: " << e.what() << std::endl;
         }
     }
 }
-
 int main() {
     std::cout << "MiniLisp Interpreter v1.0" << std::endl;
     std::cout << "Type 'exit' to quit" << std::endl;
