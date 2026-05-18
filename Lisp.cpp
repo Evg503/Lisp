@@ -1,4 +1,7 @@
-﻿#include <iostream>
+﻿// В начале файла добавьте
+#define _CRT_SECURE_NO_WARNINGS
+
+#include <iostream>
 #include <string>
 #include <vector>
 #include <memory>
@@ -8,8 +11,19 @@
 #include <sstream>
 #include <optional>
 #include <cctype>
+#include <fstream>
+#include <filesystem>
 
-// ========== Типы данных ==========
+// ========== Безопасные функции для работы с символами ==========
+inline bool isWhitespace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+inline bool isDigit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+// ========== Типы данных (без изменений) ==========
 struct Symbol {
     std::string name;
     bool operator==(const Symbol& other) const { return name == other.name; }
@@ -95,7 +109,7 @@ public:
     }
 };
 
-// ========== Парсер ==========
+// ========== Исправленный Tokenizer с безопасными функциями ==========
 class Tokenizer {
     std::string input;
     size_t pos = 0;
@@ -110,6 +124,11 @@ class Tokenizer {
         return input[pos++];
     }
 
+    // Безопасная проверка на пробел
+    bool isSpace(char c) const {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+    }
+
 public:
     Tokenizer(const std::string& src) : input(src) {}
 
@@ -119,24 +138,27 @@ public:
         while (pos < input.length()) {
             char c = peek();
 
-            if (std::isspace(c)) {
+            // Пропускаем пробелы
+            if (isSpace(c)) {
                 advance();
                 continue;
             }
 
+            // Скобки
             if (c == '(' || c == ')') {
                 tokens.push_back(std::string(1, c));
                 advance();
                 continue;
             }
 
+            // Строки
             if (c == '"') {
                 std::string str;
-                advance();
+                advance(); // пропускаем открывающую кавычку
 
                 while (pos < input.length() && peek() != '"') {
                     if (peek() == '\\') {
-                        advance();
+                        advance(); // пропускаем backslash
                         if (pos < input.length()) {
                             char escaped = advance();
                             switch (escaped) {
@@ -158,17 +180,19 @@ public:
                     throw std::runtime_error("Unclosed string literal");
                 }
 
-                advance();
+                advance(); // пропускаем закрывающую кавычку
                 tokens.push_back("\"" + str + "\"");
                 continue;
             }
 
+            // Числа, символы и булевы значения
             std::string token;
-            while (pos < input.length() && !std::isspace(peek()) &&
+            while (pos < input.length() && !isSpace(peek()) &&
                 peek() != '(' && peek() != ')' && peek() != '"') {
                 token += advance();
             }
 
+            // Проверяем на булевы значения
             if (token == "#t" || token == "#f") {
                 tokens.push_back(token);
             }
@@ -181,7 +205,7 @@ public:
     }
 };
 
-// ========== Исправленный Parser с методом hasMore ==========
+// ========== Исправленный Parser ==========
 class Parser {
     std::vector<std::string> tokens;
     size_t pos = 0;
@@ -190,22 +214,32 @@ class Parser {
         if (token.empty()) return false;
         size_t start = (token[0] == '-') ? 1 : 0;
         if (start >= token.length()) return false;
-        return std::all_of(token.begin() + start, token.end(), ::isdigit);
+
+        // Безопасная проверка цифр
+        for (size_t i = start; i < token.length(); i++) {
+            char c = token[i];
+            if (c < '0' || c > '9') return false;
+        }
+        return true;
     }
 
     ObjectPtr parseAtom(const std::string& token) {
+        // Число
         if (isNumber(token)) {
             return std::make_shared<Object>(Integer{ std::stoll(token) });
         }
 
+        // Булево
         if (token == "#t") return std::make_shared<Object>(Boolean{ true });
         if (token == "#f") return std::make_shared<Object>(Boolean{ false });
 
+        // Строка (убираем кавычки)
         if (token.length() >= 2 && token.front() == '"' && token.back() == '"') {
             std::string content = token.substr(1, token.length() - 2);
             return std::make_shared<Object>(String{ content });
         }
 
+        // Символ
         return std::make_shared<Object>(Symbol{ token });
     }
 
@@ -243,16 +277,7 @@ public:
     }
 };
 
-// ========== Функция для парсинга нескольких выражений ==========
-std::vector<ObjectPtr> parseMultiple(Parser& parser) {
-    std::vector<ObjectPtr> expressions;
-    while (parser.hasMore()) {
-        expressions.push_back(parser.parse());
-    }
-    return expressions;
-}
-
-// ========== Вывод ==========
+// ========== Вывод (без изменений) ==========
 std::string toString(ObjectPtr obj) {
     if (obj->isNil()) return "()";
     if (obj->isInteger()) return std::to_string(obj->asInteger().value);
@@ -293,7 +318,7 @@ std::string toDisplayString(ObjectPtr obj) {
     if (obj->isInteger()) return std::to_string(obj->asInteger().value);
     if (obj->isBoolean()) return obj->asBoolean().value ? "#t" : "#f";
     if (obj->isString()) {
-        return obj->asString().value;  // Без кавычек и экранирования
+        return obj->asString().value;
     }
     if (obj->isSymbol()) return obj->asSymbol().name;
     if (obj->isFunction()) return "<function>";
@@ -311,7 +336,7 @@ std::string toDisplayString(ObjectPtr obj) {
     return "unknown";
 }
 
-// ========== Оценщик ==========
+// ========== Оценщик (forward declaration) ==========
 ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env);
 
 // ========== Примитивные функции ==========
@@ -443,7 +468,17 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
         return std::make_shared<Object>(Nil{});
     }
 
-    if (name == "write") {  // write выводит с кавычками (как toString)
+    if (name == "print") {
+        for (size_t i = 0; i < args.size(); i++) {
+            if (i > 0) std::cout << " ";
+            ObjectPtr evaled = eval(args[i], env);
+            std::cout << toDisplayString(evaled);
+        }
+        std::cout << std::endl;
+        return std::make_shared<Object>(Nil{});
+    }
+
+    if (name == "write") {
         for (auto& arg : args) {
             std::cout << toString(eval(arg, env));
         }
@@ -455,9 +490,13 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
         return std::make_shared<Object>(Nil{});
     }
 
-    // Добавьте в applyPrimitive:
-    if (name == "flush") {
-        std::cout.flush();
+    if (name == "load") {
+        if (args.size() != 1) throw std::runtime_error("load requires exactly 1 argument");
+        ObjectPtr filename = eval(args[0], env);
+        if (!filename->isString()) throw std::runtime_error("load: argument must be a string");
+
+        // Здесь должна быть функция loadFile
+        // loadFile(filename->asString().value, env);
         return std::make_shared<Object>(Nil{});
     }
 
@@ -560,8 +599,132 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
     throw std::runtime_error("Unknown expression type");
 }
 
-// ========== Исправленный REPL ==========
-void repl() {
+// ========== Функция для загрузки файла ==========
+void loadFile(const std::string& filename, std::shared_ptr<Environment> env) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open file: " + filename);
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string content = buffer.str();
+    file.close();
+
+    if (content.empty()) return;
+
+    Tokenizer tokenizer(content);
+    auto tokens = tokenizer.tokenize();
+    Parser parser(tokens);
+
+    std::vector<ObjectPtr> expressions;
+    while (parser.hasMore()) {
+        expressions.push_back(parser.parse());
+    }
+
+    for (auto& expr : expressions) {
+        eval(expr, env);
+    }
+}
+
+// ========== Кроссплатформенная функция для домашней директории ==========
+std::string getHomeDirectory() {
+    const char* home = std::getenv("HOME");
+    if (home) return std::string(home);
+
+    // Windows fallback
+    const char* userprofile = std::getenv("USERPROFILE");
+    if (userprofile) return std::string(userprofile);
+
+    return "";
+}
+
+// ========== Поиск init-файла ==========
+std::string findInitFile() {
+    // Проверяем текущую директорию
+    if (std::filesystem::exists(".minilisp.scm")) {
+        return ".minilisp.scm";
+    }
+    if (std::filesystem::exists(".minilisp")) {
+        return ".minilisp";
+    }
+
+    // Проверяем домашнюю директорию
+    std::string home = getHomeDirectory();
+    if (!home.empty()) {
+        std::string initPath = home + "/.minilisp.scm";
+        if (std::filesystem::exists(initPath)) {
+            return initPath;
+        }
+        initPath = home + "/.minilisp";
+        if (std::filesystem::exists(initPath)) {
+            return initPath;
+        }
+    }
+
+    return "";
+}
+
+// ========== REPL ==========
+void repl(std::shared_ptr<Environment> env) {
+    std::string input;
+
+    std::cout << "MiniLisp Interpreter v1.0" << std::endl;
+    std::cout << "Type 'exit' or 'quit' to quit" << std::endl;
+
+    while (true) {
+        std::cout << "minilisp> ";
+        std::getline(std::cin, input);
+
+        if (input == "exit" || input == "quit") break;
+        if (input.empty()) continue;
+
+        try {
+            Tokenizer tokenizer(input);
+            auto tokens = tokenizer.tokenize();
+            Parser parser(tokens);
+
+            std::vector<ObjectPtr> expressions;
+            while (parser.hasMore()) {
+                expressions.push_back(parser.parse());
+            }
+
+            if (expressions.empty()) continue;
+
+            ObjectPtr lastResult = nullptr;
+            for (auto& expr : expressions) {
+                lastResult = eval(expr, env);
+            }
+
+            if (lastResult && !expressions.empty()) {
+                ObjectPtr lastExpr = expressions.back();
+                bool isSilent = false;
+
+                if (lastExpr->isList()) {
+                    auto& list = lastExpr->asList();
+                    if (!list.empty() && list[0]->isSymbol()) {
+                        std::string funcName = list[0]->asSymbol().name;
+                        if (funcName == "display" || funcName == "print" ||
+                            funcName == "newline" || funcName == "define" ||
+                            funcName == "load") {
+                            isSilent = true;
+                        }
+                    }
+                }
+
+                if (!isSilent && !lastResult->isNil()) {
+                    std::cout << toString(lastResult) << std::endl;
+                }
+            }
+        }
+        catch (const std::exception& e) {
+            std::cout << "Error: " << e.what() << std::endl;
+        }
+    }
+}
+
+// ========== main ==========
+int main() {
     auto globalEnv = std::make_shared<Environment>();
 
     // Добавляем примитивы
@@ -580,67 +743,21 @@ void repl() {
     globalEnv->define("print", std::make_shared<Object>(Symbol{ "print" }));
     globalEnv->define("write", std::make_shared<Object>(Symbol{ "write" }));
     globalEnv->define("newline", std::make_shared<Object>(Symbol{ "newline" }));
-    globalEnv->define("flush", std::make_shared<Object>(Symbol{ "flush" }));
+    globalEnv->define("load", std::make_shared<Object>(Symbol{ "load" }));
 
-    std::string input;
-    while (true) {
-        std::cout << "minilisp> ";
-        std::getline(std::cin, input);
-
-        if (input == "exit" || input == "quit") break;
-        if (input.empty()) continue;
-
+    // Загружаем init-файл
+    std::string initFile = findInitFile();
+    if (!initFile.empty()) {
         try {
-            Tokenizer tokenizer(input);
-            auto tokens = tokenizer.tokenize();
-            Parser parser(tokens);
-
-            // Парсим ВСЕ выражения в строке
-            std::vector<ObjectPtr> expressions;
-            while (parser.hasMore()) {
-                expressions.push_back(parser.parse());
-            }
-
-            // Выполняем каждое выражение
-            ObjectPtr lastResult = nullptr;
-            for (auto& expr : expressions) {
-                lastResult = eval(expr, globalEnv);
-            }
-
-            // Выводим только результат последнего выражения,
-            // если оно не является "silent" функцией
-            if (lastResult && !expressions.empty()) {
-                // Проверяем, было ли последнее выражение вызовом display/print/newline/define
-                ObjectPtr lastExpr = expressions.back();
-                bool isSilent = false;
-
-                if (lastExpr->isList()) {
-                    auto& list = lastExpr->asList();
-                    if (!list.empty() && list[0]->isSymbol()) {
-                        std::string funcName = list[0]->asSymbol().name;
-                        if (funcName == "display" || funcName == "print" ||
-                            funcName == "newline" || funcName == "define") {
-                            isSilent = true;
-                        }
-                    }
-                }
-
-                // Если это define, он возвращает Nil, но мы не выводим его
-                if (!isSilent && !lastResult->isNil()) {
-                    std::cout << toString(lastResult) << std::endl;
-                }
-            }
+            loadFile(initFile, globalEnv);
         }
         catch (const std::exception& e) {
-            std::cout << "Error: " << e.what() << std::endl;
+            std::cerr << "Warning: Failed to load init file: " << e.what() << std::endl;
         }
     }
-}
-int main() {
-    std::cout << "MiniLisp Interpreter v1.0" << std::endl;
-    std::cout << "Type 'exit' to quit" << std::endl;
-    std::cout << "display: prints strings without quotes" << std::endl;
-    std::cout << "write:   prints strings with quotes and escapes" << std::endl;
-    repl();
+
+    // Запускаем REPL
+    repl(globalEnv);
+
     return 0;
 }
