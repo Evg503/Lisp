@@ -15,10 +15,12 @@ struct Symbol {
     bool operator==(const Symbol& other) const { return name == other.name; }
 };
 
-// Forward declaration
+// Forward declarations
 struct Object;
 using ObjectPtr = std::shared_ptr<Object>;
 using ObjectList = std::vector<ObjectPtr>;
+
+class Environment;  // Forward declaration
 
 // Типы Lisp объектов
 struct Nil {};
@@ -28,9 +30,9 @@ struct String { std::string value; };
 
 // Функция (замыкание)
 struct Function {
-    std::vector<std::string> params;
-    ObjectPtr body;
-    std::shared_ptr<Environment> env;
+    std::vector<std::string> params;     // имена параметров
+    ObjectPtr body;                       // тело функции
+    std::shared_ptr<Environment> env;     // окружение захвата
 };
 
 struct Object {
@@ -60,6 +62,7 @@ struct Object {
     bool isList() const { return std::holds_alternative<ObjectList>(data); }
     bool isFunction() const { return std::holds_alternative<Function>(data); }
 
+    // Геттеры с проверкой
     Integer& asInteger() { return std::get<Integer>(data); }
     Boolean& asBoolean() { return std::get<Boolean>(data); }
     String& asString() { return std::get<String>(data); }
@@ -95,7 +98,7 @@ public:
     }
 };
 
-// ========== Парсер (исправленный) ==========
+// ========== Парсер ==========
 class Tokenizer {
     std::string input;
     size_t pos = 0;
@@ -283,7 +286,7 @@ std::string toString(ObjectPtr obj) {
     return "unknown";
 }
 
-// ========== Оценщик ==========
+// ========== Оценщик (forward declaration) ==========
 ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env);
 
 // ========== Примитивные функции ==========
@@ -424,25 +427,30 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
 
 // ========== eval реализация ==========
 ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
+    // Самовычисляющиеся выражения
     if (expr->isInteger() || expr->isBoolean() || expr->isString() || expr->isNil()) {
         return expr;
     }
 
+    // Символ - поиск в окружении
     if (expr->isSymbol()) {
         return env->find(expr->asSymbol().name);
     }
 
+    // Список - форма
     if (expr->isList()) {
         auto& list = expr->asList();
-        if (list.empty()) return expr;
+        if (list.empty()) return expr; // пустой список
 
         ObjectPtr first = list[0];
 
+        // quote
         if (first->isSymbol() && first->asSymbol().name == "quote") {
             if (list.size() != 2) throw std::runtime_error("quote requires exactly 1 argument");
             return list[1];
         }
 
+        // if
         if (first->isSymbol() && first->asSymbol().name == "if") {
             if (list.size() != 4) throw std::runtime_error("if requires 3 arguments");
             ObjectPtr condition = eval(list[1], env);
@@ -454,6 +462,7 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             }
         }
 
+        // define
         if (first->isSymbol() && first->asSymbol().name == "define") {
             if (list.size() != 3) throw std::runtime_error("define requires 2 arguments");
             if (!list[1]->isSymbol()) {
@@ -465,6 +474,7 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return std::make_shared<Object>(Nil{});
         }
 
+        // lambda
         if (first->isSymbol() && first->asSymbol().name == "lambda") {
             if (list.size() != 3) throw std::runtime_error("lambda requires 2 arguments");
             if (!list[1]->isList()) {
@@ -486,8 +496,10 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return std::make_shared<Object>(func);
         }
 
+        // Функция (вызов)
         ObjectPtr func = eval(first, env);
 
+        // Примитивная функция
         if (func->isSymbol()) {
             ObjectList args;
             for (size_t i = 1; i < list.size(); i++) {
@@ -496,10 +508,12 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return applyPrimitive(func->asSymbol().name, args, env);
         }
 
+        // Пользовательская функция
         if (func->isFunction()) {
             auto& f = func->asFunction();
             auto newEnv = std::make_shared<Environment>(f.env);
 
+            // Связываем параметры с аргументами
             if (list.size() - 1 != f.params.size()) {
                 throw std::runtime_error("Wrong number of arguments");
             }
@@ -522,6 +536,7 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
 void repl() {
     auto globalEnv = std::make_shared<Environment>();
 
+    // Добавляем примитивы
     globalEnv->define("+", std::make_shared<Object>(Symbol{ "+" }));
     globalEnv->define("-", std::make_shared<Object>(Symbol{ "-" }));
     globalEnv->define("*", std::make_shared<Object>(Symbol{ "*" }));
