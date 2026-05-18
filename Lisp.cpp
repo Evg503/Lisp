@@ -20,19 +20,17 @@ struct Object;
 using ObjectPtr = std::shared_ptr<Object>;
 using ObjectList = std::vector<ObjectPtr>;
 
-class Environment;  // Forward declaration
+class Environment;
 
-// Типы Lisp объектов
 struct Nil {};
 struct Integer { long long value; };
 struct Boolean { bool value; };
 struct String { std::string value; };
 
-// Функция (замыкание)
 struct Function {
-    std::vector<std::string> params;     // имена параметров
-    ObjectPtr body;                       // тело функции
-    std::shared_ptr<Environment> env;     // окружение захвата
+    std::vector<std::string> params;
+    ObjectPtr body;
+    std::shared_ptr<Environment> env;
 };
 
 struct Object {
@@ -62,7 +60,6 @@ struct Object {
     bool isList() const { return std::holds_alternative<ObjectList>(data); }
     bool isFunction() const { return std::holds_alternative<Function>(data); }
 
-    // Геттеры с проверкой
     Integer& asInteger() { return std::get<Integer>(data); }
     Boolean& asBoolean() { return std::get<Boolean>(data); }
     String& asString() { return std::get<String>(data); }
@@ -122,27 +119,24 @@ public:
         while (pos < input.length()) {
             char c = peek();
 
-            // Пропускаем пробелы
             if (std::isspace(c)) {
                 advance();
                 continue;
             }
 
-            // Скобки
             if (c == '(' || c == ')') {
                 tokens.push_back(std::string(1, c));
                 advance();
                 continue;
             }
 
-            // Строки
             if (c == '"') {
                 std::string str;
-                advance(); // пропускаем открывающую кавычку
+                advance();
 
                 while (pos < input.length() && peek() != '"') {
                     if (peek() == '\\') {
-                        advance(); // пропускаем backslash
+                        advance();
                         if (pos < input.length()) {
                             char escaped = advance();
                             switch (escaped) {
@@ -164,19 +158,17 @@ public:
                     throw std::runtime_error("Unclosed string literal");
                 }
 
-                advance(); // пропускаем закрывающую кавычку
+                advance();
                 tokens.push_back("\"" + str + "\"");
                 continue;
             }
 
-            // Числа, символы и булевы значения
             std::string token;
             while (pos < input.length() && !std::isspace(peek()) &&
                 peek() != '(' && peek() != ')' && peek() != '"') {
                 token += advance();
             }
 
-            // Проверяем на булевы значения
             if (token == "#t" || token == "#f") {
                 tokens.push_back(token);
             }
@@ -201,22 +193,18 @@ class Parser {
     }
 
     ObjectPtr parseAtom(const std::string& token) {
-        // Число
         if (isNumber(token)) {
             return std::make_shared<Object>(Integer{ std::stoll(token) });
         }
 
-        // Булево
         if (token == "#t") return std::make_shared<Object>(Boolean{ true });
         if (token == "#f") return std::make_shared<Object>(Boolean{ false });
 
-        // Строка (убираем кавычки)
         if (token.length() >= 2 && token.front() == '"' && token.back() == '"') {
             std::string content = token.substr(1, token.length() - 2);
             return std::make_shared<Object>(String{ content });
         }
 
-        // Символ
         return std::make_shared<Object>(Symbol{ token });
     }
 
@@ -238,7 +226,7 @@ public:
             if (pos >= tokens.size()) {
                 throw std::runtime_error("Unclosed parenthesis");
             }
-            pos++; // пропускаем ')'
+            pos++;
             return std::make_shared<Object>(list);
         }
         else if (token == ")") {
@@ -286,7 +274,30 @@ std::string toString(ObjectPtr obj) {
     return "unknown";
 }
 
-// ========== Оценщик (forward declaration) ==========
+std::string toDisplayString(ObjectPtr obj) {
+    if (obj->isNil()) return "()";
+    if (obj->isInteger()) return std::to_string(obj->asInteger().value);
+    if (obj->isBoolean()) return obj->asBoolean().value ? "#t" : "#f";
+    if (obj->isString()) {
+        return obj->asString().value;  // Без кавычек и экранирования
+    }
+    if (obj->isSymbol()) return obj->asSymbol().name;
+    if (obj->isFunction()) return "<function>";
+    if (obj->isList()) {
+        auto& list = obj->asList();
+        if (list.empty()) return "()";
+        std::string result = "(";
+        for (size_t i = 0; i < list.size(); i++) {
+            if (i > 0) result += " ";
+            result += toDisplayString(list[i]);
+        }
+        result += ")";
+        return result;
+    }
+    return "unknown";
+}
+
+// ========== Оценщик ==========
 ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env);
 
 // ========== Примитивные функции ==========
@@ -412,6 +423,14 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
 
     if (name == "display") {
         for (auto& arg : args) {
+            ObjectPtr evaled = eval(arg, env);
+            std::cout << toDisplayString(evaled);
+        }
+        return std::make_shared<Object>(Nil{});
+    }
+
+    if (name == "write") {  // write выводит с кавычками (как toString)
+        for (auto& arg : args) {
             std::cout << toString(eval(arg, env));
         }
         return std::make_shared<Object>(Nil{});
@@ -427,30 +446,25 @@ ObjectPtr applyPrimitive(const std::string& name, const ObjectList& args,
 
 // ========== eval реализация ==========
 ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
-    // Самовычисляющиеся выражения
     if (expr->isInteger() || expr->isBoolean() || expr->isString() || expr->isNil()) {
         return expr;
     }
 
-    // Символ - поиск в окружении
     if (expr->isSymbol()) {
         return env->find(expr->asSymbol().name);
     }
 
-    // Список - форма
     if (expr->isList()) {
         auto& list = expr->asList();
-        if (list.empty()) return expr; // пустой список
+        if (list.empty()) return expr;
 
         ObjectPtr first = list[0];
 
-        // quote
         if (first->isSymbol() && first->asSymbol().name == "quote") {
             if (list.size() != 2) throw std::runtime_error("quote requires exactly 1 argument");
             return list[1];
         }
 
-        // if
         if (first->isSymbol() && first->asSymbol().name == "if") {
             if (list.size() != 4) throw std::runtime_error("if requires 3 arguments");
             ObjectPtr condition = eval(list[1], env);
@@ -462,7 +476,6 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             }
         }
 
-        // define
         if (first->isSymbol() && first->asSymbol().name == "define") {
             if (list.size() != 3) throw std::runtime_error("define requires 2 arguments");
             if (!list[1]->isSymbol()) {
@@ -474,7 +487,6 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return std::make_shared<Object>(Nil{});
         }
 
-        // lambda
         if (first->isSymbol() && first->asSymbol().name == "lambda") {
             if (list.size() != 3) throw std::runtime_error("lambda requires 2 arguments");
             if (!list[1]->isList()) {
@@ -496,10 +508,8 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return std::make_shared<Object>(func);
         }
 
-        // Функция (вызов)
         ObjectPtr func = eval(first, env);
 
-        // Примитивная функция
         if (func->isSymbol()) {
             ObjectList args;
             for (size_t i = 1; i < list.size(); i++) {
@@ -508,12 +518,10 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
             return applyPrimitive(func->asSymbol().name, args, env);
         }
 
-        // Пользовательская функция
         if (func->isFunction()) {
             auto& f = func->asFunction();
             auto newEnv = std::make_shared<Environment>(f.env);
 
-            // Связываем параметры с аргументами
             if (list.size() - 1 != f.params.size()) {
                 throw std::runtime_error("Wrong number of arguments");
             }
@@ -536,7 +544,6 @@ ObjectPtr eval(ObjectPtr expr, std::shared_ptr<Environment> env) {
 void repl() {
     auto globalEnv = std::make_shared<Environment>();
 
-    // Добавляем примитивы
     globalEnv->define("+", std::make_shared<Object>(Symbol{ "+" }));
     globalEnv->define("-", std::make_shared<Object>(Symbol{ "-" }));
     globalEnv->define("*", std::make_shared<Object>(Symbol{ "*" }));
@@ -549,6 +556,7 @@ void repl() {
     globalEnv->define("list", std::make_shared<Object>(Symbol{ "list" }));
     globalEnv->define("null?", std::make_shared<Object>(Symbol{ "null?" }));
     globalEnv->define("display", std::make_shared<Object>(Symbol{ "display" }));
+    globalEnv->define("write", std::make_shared<Object>(Symbol{ "write" }));
     globalEnv->define("newline", std::make_shared<Object>(Symbol{ "newline" }));
 
     std::string input;
@@ -576,7 +584,8 @@ void repl() {
 int main() {
     std::cout << "MiniLisp Interpreter v1.0" << std::endl;
     std::cout << "Type 'exit' to quit" << std::endl;
-    std::cout << "String literals: \"hello\\nworld\"" << std::endl;
+    std::cout << "display: prints strings without quotes" << std::endl;
+    std::cout << "write:   prints strings with quotes and escapes" << std::endl;
     repl();
     return 0;
 }
